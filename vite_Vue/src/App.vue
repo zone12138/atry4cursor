@@ -18,15 +18,15 @@ const columns = [
   { title: 'ID', key: 'id', width: 100 },
   { title: '姓名', key: 'name', width: 150 },
   { title: '年龄', key: 'age', width: 100 },
-  { title: '地址', key: 'address', width: 300 },
+  { title: '地址', key: 'address' },
 ]
 
 // 生成模拟数据
-const tableData = ref(Array.from({ length: 10000000 }, (_, index) => ({
+const tableData = ref(Array.from({ length: 10000 }, (_, index) => ({
   id: index + 1,
   name: `用户 ${index + 1}`,
   age: Math.floor(Math.random() * 50) + 18,
-  address: `地址地址地址地址地址地址地址地址地址地址地址地址地址${index + 1}`,
+  address: `地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址${index + 1}`,
 })))
 
 const handleContextMenu = ({ cell, event }) => {

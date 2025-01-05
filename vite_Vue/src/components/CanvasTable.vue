@@ -11,7 +11,7 @@
         @wheel="handleWheel"
       ></canvas>
     </div>
-    <div class="scrollbar-container">
+    <div v-if="showScrollbar" class="scrollbar-track">
       <div 
         class="scrollbar-thumb" 
         ref="scrollThumb"
@@ -36,7 +36,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, defineEmits, computed, toRaw } from 'vue'
+import { ref, onMounted, onUnmounted, defineEmits, computed, toRaw, watch } from 'vue'
 import { throttle } from 'lodash'
 
 const props = defineProps({
@@ -85,17 +85,24 @@ const state = ref({
 
 // 计算滚动条高度和位置
 const thumbHeight = computed(() => {
-  const totalHeight = tableContainer.value?.clientHeight || 0
+  const containerHeight = tableContainer.value?.clientHeight - props.headerHeight || 0
   const contentHeight = props.data.length * props.rowHeight
-  return Math.max(40, (totalHeight / contentHeight) * totalHeight)
+  const minThumbHeight = 40
+  const heightRatio = containerHeight / contentHeight
+  
+  // 确保滚动条高度不小于最小值
+  return Math.max(minThumbHeight, heightRatio * containerHeight)
 })
 
 const thumbPosition = computed(() => {
-  const totalHeight = tableContainer.value?.clientHeight || 0
+  const containerHeight = tableContainer.value?.clientHeight - props.headerHeight || 0
   const contentHeight = props.data.length * props.rowHeight
-  const maxScroll = contentHeight - totalHeight
-  const scrollableHeight = totalHeight - thumbHeight.value
-  return (scrollTop.value / maxScroll) * scrollableHeight
+  const maxScroll = contentHeight - containerHeight
+  const scrollableHeight = containerHeight - thumbHeight.value
+  
+  // 计算滚动条位置，并加上表头高度作为起始位置
+  return maxScroll === 0 ? props.headerHeight : 
+    (scrollTop.value / maxScroll) * scrollableHeight + props.headerHeight
 })
 
 // 添加新的响应式变量
@@ -106,64 +113,162 @@ const tooltip = ref({
   y: 0
 })
 
-// 添加计算总宽度的计算属性
+// 添加容器宽度的响应式引用
+const containerWidth = ref(0)
+
+// 监听容器宽度变化
+watch(containerWidth, () => {
+  requestAnimationFrame(() => {
+    initCanvas()
+    render()
+  })
+})
+
+// 添加列宽计算的计算属性
+const columnWidths = computed(() => {
+  const minTableWidth = containerWidth.value - (showScrollbar.value ? 12 : 0)
+  let fixedWidth = 0
+  let flexColumns = 0
+  
+  // 计算固定宽度列的总宽度和弹性列数量
+  props.columns.forEach(column => {
+    if (column.width) {
+      fixedWidth += column.width
+    } else {
+      flexColumns++
+    }
+  })
+  
+  // 计算每个弹性列的宽度
+  let flexWidth = flexColumns > 0 ? Math.max((minTableWidth - fixedWidth) / flexColumns, 150) : 0
+  
+  // 如果总宽度小于容器宽度，重新分配弹性列宽度
+  const totalFlexWidth = flexWidth * flexColumns
+  if (fixedWidth + totalFlexWidth < minTableWidth && flexColumns > 0) {
+    flexWidth = (minTableWidth - fixedWidth) / flexColumns
+  }
+  
+  // 生成最终的列宽对象
+  const widths = {}
+  props.columns.forEach((column, index) => {
+    // 优先使用用户调整后的宽度
+    if (state.value.columnWidths[index]) {
+      widths[index] = state.value.columnWidths[index]
+    } else {
+      // 否则使用配置宽度或计算宽度
+      widths[index] = column.width || flexWidth
+    }
+  })
+  
+  return widths
+})
+
+// 修改总宽度计算
 const totalWidth = computed(() => {
   return props.columns.reduce((sum, _, index) => {
-    return sum + (state.value.columnWidths[index] || 150)
+    return sum + columnWidths.value[index]
   }, 0)
 })
 
+// 添加计算属性判断是否需要显示滚动条
+const showScrollbar = computed(() => {
+  const contentHeight = props.data.length * props.rowHeight
+  const containerHeight = tableContainer.value?.clientHeight - props.headerHeight || 0
+  return contentHeight > containerHeight
+})
+
+// 添加 ResizeObserver 引用
+const resizeObserver = ref(null)
+
 onMounted(() => {
+  // 初始化容器宽度
+  if (tableContainer.value) {
+    containerWidth.value = tableContainer.value.getBoundingClientRect().width
+  }
+  
+  // 创建 ResizeObserver
+  resizeObserver.value = new ResizeObserver(entries => {
+    const entry = entries[0]
+    if (entry) {
+      // 更新容器宽度
+      containerWidth.value = entry.contentRect.width
+      
+      // 重新计算列宽
+      if (!props.columns.some(col => col.width)) {
+        state.value.columnWidths = {}
+      }
+    }
+  })
+  
+  // 开始观察容器尺寸变化
+  if (tableContainer.value) {
+    resizeObserver.value.observe(tableContainer.value)
+  }
+  
+  // 初始化
   initCanvas()
-  window.addEventListener('resize', handleResize)
   render()
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
+  // 停止观察并清理 ResizeObserver
+  if (resizeObserver.value) {
+    resizeObserver.value.disconnect()
+  }
+  
+  // 移除其他事件监听
   window.removeEventListener('mousemove', handleScrollMove)
   window.removeEventListener('mouseup', handleScrollEnd)
 })
 
+// 修改 initCanvas 方法
 const initCanvas = () => {
+  if (!tableContainer.value) return
+  
   const canvas = tableCanvas.value
-  ctx.value = canvas.getContext('2d')
+  // 只在首次初始化时获取 context
+  if (!ctx.value) {
+    ctx.value = canvas.getContext('2d')
+  }
   
   const dpr = window.devicePixelRatio
-  const containerRect = tableContainer.value.getBoundingClientRect()
-  const width = Math.max(totalWidth.value, containerRect.width)
-  const height = containerRect.height
+  const width = Math.max(totalWidth.value, containerWidth.value - (showScrollbar.value ? 12 : 0))
+  const height = tableContainer.value.getBoundingClientRect().height
   
+  // 更新 canvas 尺寸
   canvas.width = width * dpr
   canvas.height = height * dpr
   canvas.style.width = `${width}px`
   canvas.style.height = `${height}px`
   
+  // 设置 context scale
   ctx.value.scale(dpr, dpr)
 }
 
-const render = throttle(() => {
+const render = () => {
   if (!ctx.value) return
   
-  const context = ctx.value
-  context.clearRect(0, 0, tableCanvas.value.width, tableCanvas.value.height)
-  
-  // 先绘制数据行
-  drawRows()
-  
-  // 后绘制表头，确保表头在最上层
-  drawHeaders()
-  
-  // 绘制选中行高亮
-  if (selectedRow.value !== null) {
-    drawHighlightRow(selectedRow.value, 'rgba(24, 144, 255, 0.1)')
-  }
-  
-  // 绘制悬停行高亮
-  if (hoveredRow.value !== null && hoveredRow.value !== selectedRow.value) {
-    drawHighlightRow(hoveredRow.value, 'rgba(0, 0, 0, 0.02)')
-  }
-}, 16)
+  requestAnimationFrame(() => {
+    const context = ctx.value
+    context.clearRect(0, 0, tableCanvas.value.width, tableCanvas.value.height)
+    
+    // 1. 绘制选中行高亮
+    if (selectedRow.value !== null) {
+      drawHighlightRow(selectedRow.value, 'rgba(24, 144, 255, 0.1)')
+    }
+    
+    // 2. 绘制悬停行高亮
+    if (hoveredRow.value !== null && hoveredRow.value !== selectedRow.value) {
+      drawHighlightRow(hoveredRow.value, 'rgba(0, 0, 0, 0.02)')
+    }
+    
+    // 3. 绘制数据行
+    drawRows()
+    
+    // 4. 最后绘制表头，确保表头始终在最上层
+    drawHeaders()
+  })
+}
 
 const drawHeaders = () => {
   const context = ctx.value
@@ -173,7 +278,7 @@ const drawHeaders = () => {
   context.fillRect(0, 0, totalWidth.value, props.headerHeight)
   
   props.columns.forEach((column, index) => {
-    const width = state.value.columnWidths[index] || 150
+    const width = columnWidths.value[index]
     
     // 绘制表头文本
     context.fillStyle = '#333'
@@ -209,7 +314,7 @@ const drawRows = () => {
     
     let x = 0
     props.columns.forEach((column, columnIndex) => {
-      const width = state.value.columnWidths[columnIndex] || 150
+      const width = columnWidths.value[columnIndex]
       const text = String(row[column.key] ?? '')
       
       // 绘制单元格文本
@@ -238,59 +343,51 @@ const drawRows = () => {
         // 改进换行处理逻辑
         const padding = 10
         const maxWidth = width - padding * 2
-        let remainingText = text
-        let currentY = y + padding // 从单元格顶部开始
-
-        while (remainingText.length > 0 && currentY < y + props.rowHeight - padding) {
-          let lineText = ''
-          let testText = ''
-          let lastSpaceIndex = -1
+        const lineHeight = 20 // 行高
+        const maxLines = Math.floor((props.rowHeight - padding * 2) / lineHeight) // 最大行数
+        
+        let lines = []
+        let currentLine = ''
+        let words = text.split(/(?<=[\u4e00-\u9fa5])|(?=[\u4e00-\u9fa5])|(?<=\s)|(?=\s)/) // 按中文字符和空格分割
+        
+        // 计算每一行的文本
+        for (let word of words) {
+          const testLine = currentLine + word
+          const testWidth = context.measureText(testLine).width
           
-          // 逐个字符测试宽度
-          for (let i = 0; i < remainingText.length; i++) {
-            testText = remainingText.substring(0, i + 1)
-            const testWidth = context.measureText(testText).width
+          if (testWidth > maxWidth && currentLine) {
+            lines.push(currentLine)
+            currentLine = word
             
-            // 记录最后一个空格位置，用于英文单词换行
-            if (remainingText[i] === ' ') {
-              lastSpaceIndex = i
-            }
-            
-            // 如果超出宽度，进行换行处理
-            if (testWidth > maxWidth) {
-              // 如果有空格，在空格处换行（英文单词处理）
-              if (lastSpaceIndex !== -1 && testText.length > 1) {
-                lineText = remainingText.substring(0, lastSpaceIndex)
-                remainingText = remainingText.substring(lastSpaceIndex + 1)
-              } else {
-                // 如果没有空格，直接在当前位置换行
-                lineText = remainingText.substring(0, i)
-                remainingText = remainingText.substring(i)
+            // 检查是否超出最大行数
+            if (lines.length >= maxLines) {
+              if (words.length > words.indexOf(word) + 1) {
+                // 如果还有更多文本，在最后一行添加省略号
+                while (context.measureText(currentLine + '...').width > maxWidth) {
+                  currentLine = currentLine.slice(0, -1)
+                }
+                currentLine += '...'
               }
               break
             }
-            
-            // 如果已经是最后一个字符
-            if (i === remainingText.length - 1) {
-              lineText = remainingText
-              remainingText = ''
-            }
-          }
-          
-          // 绘制当前行
-          context.fillText(lineText, x + padding, currentY)
-          currentY += 20 // 行高
-          
-          // 如果还有剩余文本但已经到达单元格底部，显示省略号
-          if (remainingText && currentY >= y + props.rowHeight - padding) {
-            let lastLine = lineText
-            while (context.measureText(lastLine + '...').width > maxWidth) {
-              lastLine = lastLine.slice(0, -1)
-            }
-            context.fillText(lastLine + '...', x + padding, currentY - 20)
-            break
+          } else {
+            currentLine += word
           }
         }
+        
+        // 添加最后一行
+        if (currentLine && lines.length < maxLines) {
+          lines.push(currentLine)
+        }
+        
+        // 计算文本垂直居中的起始位置
+        const totalTextHeight = lines.length * lineHeight
+        let startY = y + (props.rowHeight - totalTextHeight) / 2
+        
+        // 绘制所有行
+        lines.forEach((line, index) => {
+          context.fillText(line, x + padding, startY + index * lineHeight + lineHeight / 2)
+        })
       }
       
       // 绘制列分割线
@@ -322,11 +419,16 @@ const handleMouseDown = (e) => {
     return
   }
   
-  // 处理行选择
+  // 处理行选择 - 添加有效行判断
   if (offsetY > props.headerHeight) {
     const rowIndex = Math.floor((offsetY - props.headerHeight + scrollTop.value) / props.rowHeight)
-    selectedRow.value = rowIndex
-    render()
+    if (rowIndex < props.data.length) { // 只在点击有效行时设置选中状态
+      selectedRow.value = rowIndex
+      render()
+    } else {
+      selectedRow.value = null // 点击空白处清除选中状态
+      render()
+    }
   }
 }
 
@@ -342,9 +444,9 @@ const handleMouseMove = (e) => {
     return
   }
   
-  // 更新悬停状态 - 只记录行索引
+  // 更新悬停状态 - 添加有效行判断
   const cell = getCellFromPoint(offsetX, offsetY)
-  if (cell) {
+  if (cell && cell.rowIndex < props.data.length) { // 只在有效行上显示悬停效果
     hoveredRow.value = cell.rowIndex
   } else {
     hoveredRow.value = null
@@ -353,7 +455,7 @@ const handleMouseMove = (e) => {
   // 处理 tooltip
   if (cell && props.showEllipsis) {
     const text = String(props.data[cell.rowIndex]?.[props.columns[cell.columnIndex].key] ?? '')
-    const width = state.value.columnWidths[cell.columnIndex] || 150
+    const width = columnWidths.value[cell.columnIndex]
     const context = ctx.value
     context.font = '14px Arial'
     const textWidth = context.measureText(text).width
@@ -396,7 +498,7 @@ const handleContextMenu = (e) => {
 
 const handleWheel = (e) => {
   e.preventDefault()
-  const totalHeight = tableContainer.value.clientHeight
+  const containerHeight = tableContainer.value.clientHeight - props.headerHeight // 减去表头高度
   const contentHeight = props.data.length * props.rowHeight
   
   if (e.shiftKey) {
@@ -422,17 +524,12 @@ const handleWheel = (e) => {
       0,
       Math.min(
         scrollTop.value + e.deltaY,
-        contentHeight - totalHeight
+        contentHeight - containerHeight // 使用减去表头高度后的容器高度
       )
     )
   }
   render()
 }
-
-const handleResize = throttle(() => {
-  initCanvas()
-  render()
-}, 100)
 
 // 工具函数
 const isNearColumnBorder = (x, y) => {
@@ -440,7 +537,7 @@ const isNearColumnBorder = (x, y) => {
   
   let currentX = 0
   for (let i = 0; i < props.columns.length; i++) {
-    currentX += state.value.columnWidths[i] || 150
+    currentX += columnWidths.value[i]
     if (Math.abs(x - currentX) < 5) {
       resizingColumn.value = i
       return true
@@ -458,7 +555,7 @@ const getCellFromPoint = (x, y) => {
   let columnIndex = 0
   
   for (let i = 0; i < props.columns.length; i++) {
-    const width = state.value.columnWidths[i] || 150
+    const width = columnWidths.value[i]
     if (x >= currentX && x < currentX + width) {
       columnIndex = i
       break
@@ -479,8 +576,17 @@ const drawHighlightRow = (rowIndex, color) => {
   const context = ctx.value
   const y = rowIndex * props.rowHeight - scrollTop.value + props.headerHeight
   
+  // 创建裁剪区域，排除表头
+  context.save() // 保存当前上下文状态
+  context.beginPath()
+  context.rect(0, props.headerHeight, totalWidth.value, tableCanvas.value.height - props.headerHeight)
+  context.clip() // 设置裁剪区域
+  
+  // 绘制高亮背景
   context.fillStyle = color
   context.fillRect(0, y, totalWidth.value, props.rowHeight)
+  
+  context.restore() // 恢复上下文状态
 }
 
 // 添加滚动条拖动相关方法
@@ -498,14 +604,14 @@ const handleScrollMove = (e) => {
   if (!isDraggingScroll.value) return
   
   const deltaY = e.clientY - startDragY.value
-  const totalHeight = tableContainer.value.clientHeight
+  const containerHeight = tableContainer.value.clientHeight - props.headerHeight // 减去表头高度
   const contentHeight = props.data.length * props.rowHeight
-  const scrollableHeight = totalHeight - thumbHeight.value
+  const scrollableHeight = containerHeight - thumbHeight.value
   
-  const scrollRatio = (contentHeight - totalHeight) / scrollableHeight
+  const scrollRatio = (contentHeight - containerHeight) / scrollableHeight
   const newScrollTop = startScrollTop.value + deltaY * scrollRatio
   
-  scrollTop.value = Math.max(0, Math.min(newScrollTop, contentHeight - totalHeight))
+  scrollTop.value = Math.max(0, Math.min(newScrollTop, contentHeight - containerHeight))
   render()
 }
 
@@ -562,20 +668,26 @@ const handleMouseOut = () => {
 .canvas-wrapper {
   position: relative;
   height: 100%;
+  margin-right: v-bind("showScrollbar ? '12px' : 0");
+  min-width: v-bind("showScrollbar ? 'calc(100% - 12px)' : '100%'");
+  transition: margin-right 0.2s;
 }
 
 canvas {
   display: block;
 }
 
-.scrollbar-container {
-  position: fixed;
+.scrollbar-track {
+  position: absolute;
   right: 0;
   top: 0;
   bottom: 0;
   width: 12px;
   background-color: #f5f5f5;
   border-left: 1px solid #e8e8e8;
+  z-index: 1;
+  opacity: 1;
+  transition: opacity 0.2s;
 }
 
 .scrollbar-thumb {
