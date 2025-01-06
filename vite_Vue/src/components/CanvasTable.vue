@@ -1,6 +1,12 @@
 <template>
   <div class="canvas-table" ref="tableContainer">
-    <div class="canvas-wrapper" :style="{ width: `${totalWidth}px` }">
+    <div 
+      class="canvas-wrapper" 
+      :style="{ 
+        width: `${Math.max(totalWidth, containerWidth)}px`,
+        transform: `translateX(${-scrollLeft}px)`
+      }"
+    >
       <canvas 
         ref="tableCanvas"
         @mousedown="handleMouseDown"
@@ -32,12 +38,22 @@
     >
       {{ tooltip.text }}
     </div>
+    <div v-if="showHorizontalScrollbar" class="horizontal-scrollbar-track">
+      <div 
+        class="horizontal-scrollbar-thumb"
+        ref="horizontalScrollThumb"
+        @mousedown="handleHorizontalScrollStart"
+        :style="{
+          width: `${horizontalThumbWidth}px`,
+          transform: `translateX(${horizontalThumbPosition}px)`
+        }"
+      ></div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, defineEmits, computed, toRaw, watch } from 'vue'
-import { throttle } from 'lodash'
+import { ref, onMounted, onUnmounted, defineEmits, computed, toRaw, watch, nextTick } from 'vue'
 
 const props = defineProps({
   data: {
@@ -124,41 +140,67 @@ watch(containerWidth, () => {
   })
 })
 
-// 添加列宽计算的计算属性
-const columnWidths = computed(() => {
-  const minTableWidth = containerWidth.value - (showScrollbar.value ? 12 : 0)
-  let fixedWidth = 0
-  let flexColumns = 0
+// 添加计算单元格内容宽度的方法
+const measureCellWidth = (column, context) => {
+  if (!context) return 150
   
-  // 计算固定宽度列的总宽度和弹性列数量
-  props.columns.forEach(column => {
-    if (column.width) {
-      fixedWidth += column.width
-    } else {
-      flexColumns++
-    }
-  })
+  // 计算表头宽度
+  const headerWidth = context.measureText(column.title).width + 40
   
-  // 计算每个弹性列的宽度
-  let flexWidth = flexColumns > 0 ? Math.max((minTableWidth - fixedWidth) / flexColumns, 150) : 0
+  // 计算所有单元格内容的最大宽度
+  let maxContentWidth = 0
+  const visibleStartIndex = Math.floor(scrollTop.value / props.rowHeight)
+  const visibleEndIndex = Math.min(
+    props.data.length,
+    Math.ceil((scrollTop.value + tableContainer.value.clientHeight) / props.rowHeight)
+  )
   
-  // 如果总宽度小于容器宽度，重新分配弹性列宽度
-  const totalFlexWidth = flexWidth * flexColumns
-  if (fixedWidth + totalFlexWidth < minTableWidth && flexColumns > 0) {
-    flexWidth = (minTableWidth - fixedWidth) / flexColumns
+  // 只计算可见区域的单元格，避免性能问题
+  for (let i = visibleStartIndex; i < visibleEndIndex; i++) {
+    const content = String(props.data[i][column.key])
+    const contentWidth = context.measureText(content).width + 40 // 40px 为左右padding
+    maxContentWidth = Math.max(maxContentWidth, contentWidth)
   }
   
-  // 生成最终的列宽对象
+  // 返回表头宽度和内容宽度中的较大值
+  return Math.max(headerWidth, maxContentWidth, 150) // 最小 150px
+}
+
+// 修改 columnWidths 计算
+const columnWidths = computed(() => {
+  const context = ctx.value
+  if (!context) return {}
+  
+  context.font = '14px Arial'
   const widths = {}
+  
+  // 1. 首先计算固定宽度和最小宽度
+  let totalFixedWidth = 0
+  let flexColumns = []
+  
   props.columns.forEach((column, index) => {
-    // 优先使用用户调整后的宽度
-    if (state.value.columnWidths[index]) {
-      widths[index] = state.value.columnWidths[index]
+    if (column.width) {
+      widths[index] = column.width
+      totalFixedWidth += column.width
     } else {
-      // 否则使用配置宽度或计算宽度
-      widths[index] = column.width || flexWidth
+      // 使用新的measureCellWidth方法计算最小宽度
+      const minWidth = measureCellWidth(column, context)
+      widths[index] = minWidth
+      totalFixedWidth += minWidth
+      flexColumns.push(index)
     }
   })
+  
+  // 2. 如果总宽度小于容器宽度，分配剩余空间给弹性列
+  const availableWidth = containerWidth.value - (showScrollbar.value ? 12 : 0)
+  if (flexColumns.length > 0 && totalFixedWidth < availableWidth) {
+    const extraSpace = availableWidth - totalFixedWidth
+    const extraPerColumn = Math.floor(extraSpace / flexColumns.length)
+    
+    flexColumns.forEach(index => {
+      widths[index] += extraPerColumn
+    })
+  }
   
   return widths
 })
@@ -180,34 +222,99 @@ const showScrollbar = computed(() => {
 // 添加 ResizeObserver 引用
 const resizeObserver = ref(null)
 
-onMounted(() => {
-  // 初始化容器宽度
-  if (tableContainer.value) {
-    containerWidth.value = tableContainer.value.getBoundingClientRect().width
-  }
+// 添加横向滚动条相关的响应式变量
+const showHorizontalScrollbar = computed(() => {
+  return totalWidth.value > containerWidth.value
+})
+
+const horizontalThumbWidth = computed(() => {
+  if (!containerWidth.value || !totalWidth.value) return 40
+  const ratio = containerWidth.value / totalWidth.value
+  return Math.max(40, ratio * (containerWidth.value - (showScrollbar.value ? 12 : 0)))
+})
+
+const horizontalThumbPosition = computed(() => {
+  if (!containerWidth.value || !totalWidth.value) return 0
+  const scrollableWidth = containerWidth.value - (showScrollbar.value ? 12 : 0) - horizontalThumbWidth.value
+  const maxScroll = totalWidth.value - containerWidth.value
+  return maxScroll <= 0 ? 0 : (scrollLeft.value / maxScroll) * scrollableWidth
+})
+
+// 添加横向滚动条拖动处理方法
+const isDraggingHorizontalScroll = ref(false)
+const startDragX = ref(0)
+const startScrollLeft = ref(0)
+
+const handleHorizontalScrollStart = (e) => {
+  e.preventDefault() // 防止文本选择
+  isDraggingHorizontalScroll.value = true
+  startDragX.value = e.clientX
+  startScrollLeft.value = scrollLeft.value
   
-  // 创建 ResizeObserver
-  resizeObserver.value = new ResizeObserver(entries => {
-    const entry = entries[0]
-    if (entry) {
-      // 更新容器宽度
-      containerWidth.value = entry.contentRect.width
+  window.addEventListener('mousemove', handleHorizontalScrollMove)
+  window.addEventListener('mouseup', handleHorizontalScrollEnd)
+}
+
+const handleHorizontalScrollMove = (e) => {
+  if (!isDraggingHorizontalScroll.value) return
+  
+  const deltaX = e.clientX - startDragX.value
+  const scrollableWidth = containerWidth.value - (showScrollbar.value ? 12 : 0) - horizontalThumbWidth.value
+  const maxScroll = totalWidth.value - containerWidth.value
+  
+  if (maxScroll <= 0) return
+  
+  const scrollRatio = maxScroll / scrollableWidth
+  const newScrollLeft = startScrollLeft.value + deltaX * scrollRatio
+  
+  scrollLeft.value = Math.max(0, Math.min(newScrollLeft, maxScroll))
+  render()
+}
+
+const handleHorizontalScrollEnd = () => {
+  isDraggingHorizontalScroll.value = false
+  window.removeEventListener('mousemove', handleHorizontalScrollMove)
+  window.removeEventListener('mouseup', handleHorizontalScrollEnd)
+}
+
+onMounted(() => {
+  // 使用 nextTick 确保 DOM 已更新
+  nextTick(() => {
+    if (tableContainer.value) {
+      containerWidth.value = tableContainer.value.getBoundingClientRect().width
       
-      // 重新计算列宽
-      if (!props.columns.some(col => col.width)) {
-        state.value.columnWidths = {}
-      }
+      // 创建 ResizeObserver
+      resizeObserver.value = new ResizeObserver(entries => {
+        const entry = entries[0]
+        if (entry) {
+          containerWidth.value = entry.contentRect.width
+          
+          // 重新计算列宽
+          if (!props.columns.some(col => col.width)) {
+            state.value.columnWidths = {}
+          }
+          
+          // 重新初始化和渲染
+          requestAnimationFrame(() => {
+            initCanvas()
+            render()
+          })
+        }
+      })
+      
+      // 开始观察容器尺寸变化
+      resizeObserver.value.observe(tableContainer.value)
+      
+      // 初始化
+      initCanvas()
+      render()
     }
   })
   
-  // 开始观察容器尺寸变化
-  if (tableContainer.value) {
-    resizeObserver.value.observe(tableContainer.value)
+  // 初始化时检查是否需要显示横向滚动条
+  if (totalWidth.value > containerWidth.value) {
+    showHorizontalScrollbar.value = true
   }
-  
-  // 初始化
-  initCanvas()
-  render()
 })
 
 onUnmounted(() => {
@@ -219,11 +326,13 @@ onUnmounted(() => {
   // 移除其他事件监听
   window.removeEventListener('mousemove', handleScrollMove)
   window.removeEventListener('mouseup', handleScrollEnd)
+  window.removeEventListener('mousemove', handleHorizontalScrollMove)
+  window.removeEventListener('mouseup', handleHorizontalScrollEnd)
 })
 
 // 修改 initCanvas 方法
 const initCanvas = () => {
-  if (!tableContainer.value) return
+  if (!tableContainer.value || !tableCanvas.value) return
   
   const canvas = tableCanvas.value
   // 只在首次初始化时获取 context
@@ -235,6 +344,8 @@ const initCanvas = () => {
   const width = Math.max(totalWidth.value, containerWidth.value - (showScrollbar.value ? 12 : 0))
   const height = tableContainer.value.getBoundingClientRect().height
   
+  if (width <= 0 || height <= 0) return // 添加尺寸检查
+  
   // 更新 canvas 尺寸
   canvas.width = width * dpr
   canvas.height = height * dpr
@@ -245,8 +356,24 @@ const initCanvas = () => {
   ctx.value.scale(dpr, dpr)
 }
 
+// 添加防抖函数
+const debounce = (fn, delay) => {
+  let timer = null
+  return function (...args) {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      fn.apply(this, args)
+    }, delay)
+  }
+}
+
+// 使用防抖包装 render 函数
+const debouncedRender = debounce(() => {
+  render()
+}, 16)
+
 const render = () => {
-  if (!ctx.value) return
+  if (!ctx.value || !tableCanvas.value) return
   
   requestAnimationFrame(() => {
     const context = ctx.value
@@ -496,39 +623,23 @@ const handleContextMenu = (e) => {
   }
 }
 
+// 修改滚动处理，使用防抖的渲染
 const handleWheel = (e) => {
   e.preventDefault()
-  const containerHeight = tableContainer.value.clientHeight - props.headerHeight // 减去表头高度
+  const containerHeight = tableContainer.value.clientHeight - props.headerHeight
   const contentHeight = props.data.length * props.rowHeight
   
-  if (e.shiftKey) {
-    // 水平滚动
-    const totalWidth = props.columns.reduce((sum, _, index) => {
-      return sum + (state.value.columnWidths[index] || 150)
-    }, 0)
-    const containerWidth = tableContainer.value.clientWidth
-    
-    if (totalWidth > containerWidth) {
-      const currentScroll = tableContainer.value.scrollLeft || 0
-      tableContainer.value.scrollLeft = Math.max(
-        0,
-        Math.min(
-          currentScroll + e.deltaY,
-          totalWidth - containerWidth
-        )
-      )
-    }
+  if (e.shiftKey || (e.deltaX !== 0 && totalWidth.value > containerWidth.value)) {
+    const maxScroll = totalWidth.value - containerWidth.value
+    const newScrollLeft = scrollLeft.value + (e.deltaX || e.deltaY)
+    scrollLeft.value = Math.max(0, Math.min(newScrollLeft, maxScroll))
   } else {
-    // 垂直滚动
-    scrollTop.value = Math.max(
-      0,
-      Math.min(
-        scrollTop.value + e.deltaY,
-        contentHeight - containerHeight // 使用减去表头高度后的容器高度
-      )
-    )
+    const maxScroll = contentHeight - containerHeight
+    const newScrollTop = scrollTop.value + e.deltaY
+    scrollTop.value = Math.max(0, Math.min(newScrollTop, maxScroll))
   }
-  render()
+  
+  debouncedRender()
 }
 
 // 工具函数
@@ -601,12 +712,14 @@ const handleScrollStart = (e) => {
 }
 
 const handleScrollMove = (e) => {
-  if (!isDraggingScroll.value) return
+  if (!isDraggingScroll.value || !tableContainer.value) return
   
   const deltaY = e.clientY - startDragY.value
-  const containerHeight = tableContainer.value.clientHeight - props.headerHeight // 减去表头高度
+  const containerHeight = tableContainer.value.clientHeight - props.headerHeight
   const contentHeight = props.data.length * props.rowHeight
   const scrollableHeight = containerHeight - thumbHeight.value
+  
+  if (scrollableHeight <= 0) return
   
   const scrollRatio = (contentHeight - containerHeight) / scrollableHeight
   const newScrollTop = startScrollTop.value + deltaY * scrollRatio
@@ -655,13 +768,16 @@ const handleMouseOut = () => {
   hoveredRow.value = null
   render()
 }
+
+// 添加水平滚动相关变量
+const scrollLeft = ref(0)
 </script>
 
 <style scoped>
 .canvas-table {
   width: 100%;
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
   position: relative;
 }
 
@@ -669,8 +785,8 @@ const handleMouseOut = () => {
   position: relative;
   height: 100%;
   margin-right: v-bind("showScrollbar ? '12px' : 0");
-  min-width: v-bind("showScrollbar ? 'calc(100% - 12px)' : '100%'");
-  transition: margin-right 0.2s;
+  margin-bottom: v-bind("showHorizontalScrollbar ? '12px' : 0");
+  transition: transform 0.1s ease-out;
 }
 
 canvas {
@@ -681,13 +797,11 @@ canvas {
   position: absolute;
   right: 0;
   top: 0;
-  bottom: 0;
+  bottom: v-bind("showHorizontalScrollbar ? '12px' : 0");
   width: 12px;
   background-color: #f5f5f5;
   border-left: 1px solid #e8e8e8;
   z-index: 1;
-  opacity: 1;
-  transition: opacity 0.2s;
 }
 
 .scrollbar-thumb {
@@ -734,5 +848,35 @@ canvas {
   to {
     opacity: 1;
   }
+}
+
+.horizontal-scrollbar-track {
+  position: absolute;
+  left: 0;
+  right: v-bind("showScrollbar ? '12px' : 0");
+  bottom: 0;
+  height: 12px;
+  background-color: #f5f5f5;
+  border-top: 1px solid #e8e8e8;
+  z-index: 1;
+}
+
+.horizontal-scrollbar-thumb {
+  position: absolute;
+  height: 8px;
+  top: 2px;
+  border-radius: 4px;
+  background-color: #c1c1c1;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  user-select: none;
+}
+
+.horizontal-scrollbar-thumb:hover {
+  background-color: #a1a1a1;
+}
+
+.horizontal-scrollbar-thumb:active {
+  background-color: #909090;
 }
 </style> 

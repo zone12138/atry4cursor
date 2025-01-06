@@ -1,3 +1,11 @@
+<!--
+ * @Author: xie 1459547902@qq.com
+ * @Date: 2025-01-06 09:09:51
+ * @LastEditors: xie 1459547902@qq.com
+ * @LastEditTime: 2025-01-06 10:17:32
+ * @FilePath: \atry4cursor\vite_Vue\src\App.vue
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+-->
 <template>
   <div class="table-container">
     <CanvasTable
@@ -7,12 +15,19 @@
       :row-height="80"
       @context-menu="handleContextMenu"
     />
+    <ContextMenu
+      v-model:visible="contextMenuVisible"
+      :position="contextMenuPosition"
+      :menu-items="menuItems"
+      @select="handleMenuSelect"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
 import CanvasTable from './components/CanvasTable.vue'
+import ContextMenu from './components/ContextMenu.vue'
 
 const columns = [
   { title: 'ID', key: 'id', width: 100 },
@@ -22,16 +37,83 @@ const columns = [
 ]
 
 // 生成模拟数据
-const tableData = ref(Array.from({ length: 10000 }, (_, index) => ({
+const tableData = ref(Array.from({ length: 1000000 }, (_, index) => ({
   id: index + 1,
   name: `用户 ${index + 1}`,
   age: Math.floor(Math.random() * 50) + 18,
-  address: `地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址地址${index + 1}`,
+  address: `ABCDEFGHIJKLMNOPQRSTUVWXYZ一二三四五六七八九十${index + 1}`,
 })))
 
+const contextMenuVisible = ref(false)
+const contextMenuPosition = ref({ x: 0, y: 0 })
+const currentCell = ref(null)
+
+const menuItems = [
+  { 
+    key: 'operations',
+    label: '操作',
+    children: [
+      { key: 'copy', label: '复制' },
+      { key: 'edit', label: '编辑' },
+      { key: 'delete', label: '删除' }
+    ]
+  },
+  { 
+    key: 'export',
+    label: '导出',
+    children: [
+      { key: 'exportExcel', label: 'Excel' },
+      { key: 'exportPDF', label: 'PDF' },
+      { 
+        key: 'otherFormats',
+        label: '其他格式',
+        children: [
+          { key: 'exportCSV', label: 'CSV' },
+          { key: 'exportTXT', label: 'TXT' }
+        ]
+      }
+    ]
+  },
+  { key: 'refresh', label: '刷新' }
+]
+
 const handleContextMenu = ({ cell, event }) => {
-  console.log('右键点击:', cell)
-  // 在这里实现自定义右键菜单
+  event.preventDefault()
+  currentCell.value = cell
+  contextMenuPosition.value = {
+    x: event.clientX,
+    y: event.clientY
+  }
+  contextMenuVisible.value = true
+}
+
+const handleMenuSelect = (item) => {
+  switch (item.key) {
+    case 'copy':
+      navigator.clipboard.writeText(currentCell.value.value)
+      break
+    case 'edit':
+      console.log('编辑:', currentCell.value)
+      break
+    case 'delete':
+      console.log('删除:', currentCell.value)
+      break
+    case 'exportExcel':
+      console.log('导出 Excel')
+      break
+    case 'exportPDF':
+      console.log('导出 PDF')
+      break
+    case 'exportCSV':
+      console.log('导出 CSV')
+      break
+    case 'exportTXT':
+      console.log('导出 TXT')
+      break
+    case 'refresh':
+      console.log('刷新数据')
+      break
+  }
 }
 </script>
 
