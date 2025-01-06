@@ -2,124 +2,73 @@
  * @Author: xie 1459547902@qq.com
  * @Date: 2025-01-06 09:09:51
  * @LastEditors: xie 1459547902@qq.com
- * @LastEditTime: 2025-01-06 10:17:32
+ * @LastEditTime: 2025-01-06 15:11:11
  * @FilePath: \atry4cursor\vite_Vue\src\App.vue
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
 -->
 <template>
-  <div class="table-container">
-    <CanvasTable
-      :data="tableData"
-      :columns="columns"
-      :show-ellipsis="false"
-      :row-height="80"
-      @context-menu="handleContextMenu"
-    />
-    <ContextMenu
-      v-model:visible="contextMenuVisible"
-      :position="contextMenuPosition"
-      :menu-items="menuItems"
-      @select="handleMenuSelect"
-    />
-  </div>
+  <el-container class="layout-container">
+    <el-header class="header">
+      <div class="logo">Canvas Table System</div>
+      <el-menu
+        :default-active="activeMenu"
+        class="menu"
+        mode="horizontal"
+        router
+        @select="handleSelect"
+      >
+        <el-menu-item index="/canvas-table">
+          <el-icon><Document /></el-icon>
+          <span>Canvas Table</span>
+        </el-menu-item>
+      </el-menu>
+    </el-header>
+    
+    <el-main class="main">
+      <router-view></router-view>
+    </el-main>
+  </el-container>
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import CanvasTable from './components/CanvasTable.vue'
-import ContextMenu from './components/ContextMenu.vue'
+import { ref, computed } from 'vue'
+import { useRoute } from 'vue-router'
+import { Document } from '@element-plus/icons-vue'
 
-const columns = [
-  { title: 'ID', key: 'id', width: 100 },
-  { title: '姓名', key: 'name', width: 150 },
-  { title: '年龄', key: 'age', width: 100 },
-  { title: '地址', key: 'address' },
-]
+const route = useRoute()
+const activeMenu = computed(() => route.path)
 
-// 生成模拟数据
-const tableData = ref(Array.from({ length: 1000000 }, (_, index) => ({
-  id: index + 1,
-  name: `用户 ${index + 1}`,
-  age: Math.floor(Math.random() * 50) + 18,
-  address: `ABCDEFGHIJKLMNOPQRSTUVWXYZ一二三四五六七八九十${index + 1}`,
-})))
-
-const contextMenuVisible = ref(false)
-const contextMenuPosition = ref({ x: 0, y: 0 })
-const currentCell = ref(null)
-
-const menuItems = [
-  { 
-    key: 'operations',
-    label: '操作',
-    children: [
-      { key: 'copy', label: '复制' },
-      { key: 'edit', label: '编辑' },
-      { key: 'delete', label: '删除' }
-    ]
-  },
-  { 
-    key: 'export',
-    label: '导出',
-    children: [
-      { key: 'exportExcel', label: 'Excel' },
-      { key: 'exportPDF', label: 'PDF' },
-      { 
-        key: 'otherFormats',
-        label: '其他格式',
-        children: [
-          { key: 'exportCSV', label: 'CSV' },
-          { key: 'exportTXT', label: 'TXT' }
-        ]
-      }
-    ]
-  },
-  { key: 'refresh', label: '刷新' }
-]
-
-const handleContextMenu = ({ cell, event }) => {
-  event.preventDefault()
-  currentCell.value = cell
-  contextMenuPosition.value = {
-    x: event.clientX,
-    y: event.clientY
-  }
-  contextMenuVisible.value = true
-}
-
-const handleMenuSelect = (item) => {
-  switch (item.key) {
-    case 'copy':
-      navigator.clipboard.writeText(currentCell.value.value)
-      break
-    case 'edit':
-      console.log('编辑:', currentCell.value)
-      break
-    case 'delete':
-      console.log('删除:', currentCell.value)
-      break
-    case 'exportExcel':
-      console.log('导出 Excel')
-      break
-    case 'exportPDF':
-      console.log('导出 PDF')
-      break
-    case 'exportCSV':
-      console.log('导出 CSV')
-      break
-    case 'exportTXT':
-      console.log('导出 TXT')
-      break
-    case 'refresh':
-      console.log('刷新数据')
-      break
-  }
+const handleSelect = (key) => {
+  console.log('选中菜单:', key)
 }
 </script>
 
 <style scoped>
-.table-container {
-  width: 100%;
-  height: 100%;
+.layout-container {
+  height: 100vh;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  background-color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.logo {
+  font-size: 20px;
+  font-weight: bold;
+  margin-right: 40px;
+  color: #409EFF;
+}
+
+.menu {
+  flex: 1;
+}
+
+.main {
+  padding: 20px;
+  background-color: #f5f7fa;
 }
 </style>

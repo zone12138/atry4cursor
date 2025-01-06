@@ -1,7 +1,7 @@
 <template>
   <div
-    v-show="visible"
     class="context-menu"
+    :class="{ 'show-menu': visible }"
     :style="menuStyle"
     @contextmenu.prevent
     ref="menuRef"
@@ -21,7 +21,7 @@
       
       <ContextMenu
         v-if="item.children"
-        v-model:visible="item.isOpen"
+        v-model:visible="getMenuItemState(item.key).isOpen"
         :menu-items="item.children"
         :position="subMenuPositions[item.key]"
         :level="level + 1"
@@ -62,9 +62,20 @@ const subMenuPositions = ref({})
 const processedMenuItems = computed(() => {
   return props.menuItems.map(item => ({
     ...item,
-    isOpen: false
+    isOpen: false,
   }))
 })
+
+// 存储所有菜单项的状态
+const menuItemStates = ref(new Map())
+
+// 初始化或获取菜单项状态
+const getMenuItemState = (key) => {
+  if (!menuItemStates.value.has(key)) {
+    menuItemStates.value.set(key, { isOpen: false })
+  }
+  return menuItemStates.value.get(key)
+}
 
 // 计算菜单样式
 const menuStyle = computed(() => {
@@ -78,11 +89,12 @@ const menuStyle = computed(() => {
       top: `${adjustedY}px`,
       position: 'fixed'
     }
-  }
+  } 
   return {
     position: 'absolute',
     top: 0,
-    left: '100%'
+    left: props.position.rightEnough ? '100%' : 'auto',
+    right: props.position.rightEnough ? 'auto' : '100%'
   }
 })
 
@@ -93,7 +105,6 @@ const calculateAdjustedPosition = (x, y) => {
   const rect = menuRef.value.getBoundingClientRect()
   const viewportWidth = window.innerWidth
   const viewportHeight = window.innerHeight
-  
   let adjustedX = x
   let adjustedY = y
 
@@ -110,7 +121,6 @@ const calculateAdjustedPosition = (x, y) => {
   if (adjustedY < 0) {
     adjustedY = 5
   }
-
   return { adjustedX, adjustedY }
 }
 
@@ -125,43 +135,32 @@ const handleMouseEnter = (item, event) => {
   const rect = menuItem.getBoundingClientRect()
   const viewportWidth = window.innerWidth
 
-  // 关闭其他子菜单
+  // 关闭同级的其他子菜单
   processedMenuItems.value.forEach(menuItem => {
     if (menuItem !== item && menuItem.children) {
-      menuItem.isOpen = false
+      const state = getMenuItemState(menuItem.key)
+      state.isOpen = false
     }
   })
 
   // 检查右侧空间是否足够
   const rightSpace = viewportWidth - rect.right
-  const subMenuWidth = 160 // 子菜单宽度
-
-  // 更新子菜单的样式
-  const style = menuRef.value.style
-  if (rightSpace < subMenuWidth) {
-    // 右侧空间不足，向左展开
-    style.left = 'auto'
-    style.right = '100%'
-  } else {
-    // 右侧空间足够，向右展开
-    style.left = '100%'
-    style.right = 'auto'
-  }
+  const subMenuWidth = 160
 
   // 更新子菜单位置
-  subMenuPositions.value[item.key] = {}
+  subMenuPositions.value[item.key] = {
+    rightEnough: rightSpace >= subMenuWidth,
+  }
 
   // 显示子菜单
-  item.isOpen = true
+  const state = getMenuItemState(item.key)
+  state.isOpen = true
 }
 
 // 关闭所有子菜单
 const closeAllSubMenus = () => {
-  processedMenuItems.value.forEach(item => {
-    if (item.children) {
-      item.isOpen = false
-    }
-  })
+  // 清空所有菜单项状态
+  menuItemStates.value.clear()
 }
 
 // 处理点击事件
@@ -185,10 +184,26 @@ const closeMenu = () => {
 
 // 处理点击外部
 const handleClickOutside = (event) => {
-  if (menuRef.value && !menuRef.value.contains(event.target)) {
+  const isClickInMenu = (element) => {
+    if (!element) return false
+    if (element.classList.contains('context-menu')) return true
+    return isClickInMenu(element.parentElement)
+  }
+
+  if (!isClickInMenu(event.target)) {
     closeMenu()
+    // 确保清空所有状态
+    menuItemStates.value.clear()
   }
 }
+
+// 监听菜单可见性变化
+watch(() => props.visible, (newVal) => {
+  if (!newVal) {
+    // 菜单隐藏时清空所有状态
+    menuItemStates.value.clear()
+  }
+})
 
 onMounted(() => {
   if (props.level === 0) {
@@ -212,6 +227,11 @@ onUnmounted(() => {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
   z-index: 9999;
   user-select: none;
+  visibility: hidden;
+}
+
+.show-menu {
+  visibility: visible;
 }
 
 .menu-item {
