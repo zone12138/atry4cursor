@@ -17,9 +17,14 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onActivated, onDeactivated } from 'vue'
 import CanvasTable from '../components/CanvasTable.vue'
 import ContextMenu from '../components/ContextMenu.vue'
+
+// 定义组件名称，用于 keep-alive
+defineOptions({
+  name: 'CanvasTable'
+})
 
 const columns = [
   { title: 'ID', key: 'id', width: 100 },
@@ -107,6 +112,16 @@ const handleMenuSelect = (item) => {
       break
   }
 }
+
+// 组件被激活时触发
+onActivated(() => {
+  console.log('组件被激活')
+})
+
+// 组件被缓存时触发
+onDeactivated(() => {
+  console.log('组件被缓存')
+})
 </script>
 
 <style scoped>

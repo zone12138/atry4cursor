@@ -15,6 +15,9 @@ const routes = [
   {
     path: '/canvas-table',
     name: 'CanvasTable',
+    meta: {
+      keepAlive: true
+    },
     component: () => import('./views/CanvasTable.vue')
   }
 ]
